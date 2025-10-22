@@ -20,7 +20,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: rohittp0/wiregaurd@v1.1
+      - uses: rohittp0/wiregaurd@v2
         with:
           config: ${{ secrets.WG_CLIENT_CONF_BASE64 }}
 ```
