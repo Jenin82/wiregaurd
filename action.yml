@@ -1,0 +1,33 @@
+name: "WireGuard Connect"
+description: "Bring up a WireGuard tunnel on Ubuntu runners (with automatic teardown)."
+author: "Rohit TP"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  config:
+    description: "Base64-encoded wg-quick config (wg0.conf)"
+    required: true
+  iface:
+    description: "WireGuard interface name"
+    required: false
+    default: "wg0"
+  check_ip:
+    description: "If true, prints external IP after up"
+    required: false
+    default: "true"
+  apt_update:
+    description: "Run apt-get update before installing wireguard"
+    required: false
+    default: "false"
+
+outputs:
+  public_ip:
+    description: "Public IP visible after tunnel is up (if check_ip=true)"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"
+  post: "dist/cleanup.js"
+  post-if: "always()"
