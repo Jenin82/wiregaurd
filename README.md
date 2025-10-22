@@ -1,4 +1,4 @@
-# WireGuard Connect (GitHub Action)
+# WireGuard
 
 Bring up a WireGuard tunnel on Ubuntu runners with automatic teardown.
 
@@ -20,7 +20,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: rohittp0/wiregaurd@v1
+      - uses: rohittp0/wiregaurd@v1.1
         with:
           config: ${{ secrets.WG_CLIENT_CONF_BASE64 }}
 ```

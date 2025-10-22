@@ -1,15 +1,23 @@
 {
   "name": "wiregaurd",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.1.0",
+  "description": "Bring up a WireGuard tunnel on Ubuntu runners with automatic teardown.",
   "type": "commonjs",
   "main": "dist/index.js",
+  "keywords": [
+    "actions", "wiregaurd", "vpn"
+  ],
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "build": "tsc",
     "bundle": "pnpm ncc build build/index.js -o dist && pnpm ncc build build/cleanup.js -o dist/cleanup",
     "package": "pnpm build && pnpm bundle"
   },
-  "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
