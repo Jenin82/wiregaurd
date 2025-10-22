@@ -139,3 +139,4 @@ vite.config.ts.timestamp-*
 .vite/
 
 .idea/
+build/

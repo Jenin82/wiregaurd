@@ -2,10 +2,12 @@
   "name": "wiregaurd",
   "version": "1.0.0",
   "description": "",
-  "type": "module",
+  "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "bundle": "pnpm ncc build build/index.js -o dist && pnpm ncc build build/cleanup.js -o dist/cleanup",
+    "package": "pnpm build && pnpm bundle"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.9.1",
+    "@vercel/ncc": "^0.38.4",
     "typescript": "^5.9.3"
   }
 }
