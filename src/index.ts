@@ -15,7 +15,7 @@ async function run() {
         const iface = core.getInput("iface") || "wg0";
         const b64 = core.getInput("config", { required: true });
         const checkIp = (core.getInput("check_ip") || "true").toLowerCase() === "true";
-        const aptUpdate = (core.getInput("apt_update") || "true").toLowerCase() === "true";
+        const aptUpdate = (core.getInput("apt_update") || "false").toLowerCase() === "true";
 
         // Decode config safely to a temp file first
         const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "wg-"));
@@ -24,9 +24,9 @@ async function run() {
 
         // Install WireGuard (Ubuntu)
         if (aptUpdate) {
-            await exec.exec("sudo", ["apt-get", "update"], { ignoreReturnCode: false });
+            await exec.exec("sudo", ["apt-get", "update"]);
         }
-        await exec.exec("sudo", ["apt-get", "install", "-y", "wireguard"], { ignoreReturnCode: false });
+        await exec.exec("sudo", ["apt-get", "install", "-y", "wireguard"]);
 
         // Place config into /etc/wireguard/<iface>.conf with 600 perms
         const etcDir = "/etc/wireguard";
@@ -43,18 +43,15 @@ async function run() {
 
         // Optional: check external IP (use a simple endpoint)
         if (checkIp) {
-            let output = "";
-            const options = {
-                listeners: {
-                    stdout: (data: Buffer) => (output += data.toString())
-                }
-            };
-            await exec.exec("bash", ["-lc", "curl -fsSL https://ifconfig.me || true"], options);
-            output = output.trim();
-            if (output) {
-                core.setOutput("public_ip", output);
-                core.info(`Public IP via WG: ${output}`);
+            const { stdout, stderr } = await exec.getExecOutput("curl", ["-fsSL", "https://ifconfig.me"],
+                { silent: true, ignoreReturnCode: true }
+            );
+            const ip = stdout.trim();
+            if (ip) {
+                core.setOutput("public_ip", ip);
+                core.info(`Public IP via WG: ${ip}`);
             } else {
+                core.error(stderr)
                 core.warning("Could not determine public IP (curl failed or blocked).");
             }
         }
