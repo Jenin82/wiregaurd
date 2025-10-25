@@ -1,5 +1,5 @@
 name: "WireGuard Connect"
-description: "Bring up a WireGuard tunnel on Ubuntu runners (with automatic teardown)."
+description: "Bring up a WireGuard tunnel on Ubuntu runners with dynamic domain-based routing."
 author: "Rohit TP"
 branding:
   icon: "shield"
@@ -13,14 +13,14 @@ inputs:
     description: "WireGuard interface name"
     required: false
     default: "wg0"
-  check_ip:
-    description: "If true, prints external IP after up"
+  domains:
+    description: "Comma-separated list of domains to route through WireGuard (for split tunneling). If not specified, all traffic is routed through WireGuard."
     required: false
-    default: "true"
-  apt_update:
-    description: "Run apt-get update before installing wireguard"
+    default: ""
+  ips:
+    description: "Comma-separated list of IP addresses (IPv4 or IPv6) to route through WireGuard."
     required: false
-    default: "false"
+    default: ""
 
 outputs:
   public_ip:
@@ -29,5 +29,3 @@ outputs:
 runs:
   using: "node24"
   main: "dist/index.js"
-  post: "dist/cleanup/index.js"
-  post-if: "always()"

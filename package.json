@@ -1,7 +1,7 @@
 {
   "name": "wiregaurd",
   "version": "2.0.0",
-  "description": "Bring up a WireGuard tunnel on Ubuntu runners with automatic teardown.",
+  "description": "Bring up a WireGuard tunnel on Ubuntu runners with dynamic domain-based routing.",
   "type": "commonjs",
   "main": "dist/index.js",
   "keywords": [
@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "bundle": "pnpm ncc build build/index.js -o dist && pnpm ncc build build/cleanup.js -o dist/cleanup",
+    "bundle": "pnpm ncc build build/index.js -o dist",
     "package": "pnpm build && pnpm bundle"
   },
   "author": "",

@@ -25699,6 +25699,14 @@ module.exports = require("diagnostics_channel");
 
 /***/ }),
 
+/***/ 2250:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("dns");
+
+/***/ }),
+
 /***/ 4434:
 /***/ ((module) => {
 
@@ -25936,52 +25944,150 @@ const io = __importStar(__nccwpck_require__(378));
 const fs_1 = __nccwpck_require__(9896);
 const os = __importStar(__nccwpck_require__(857));
 const path = __importStar(__nccwpck_require__(6928));
+const dns_1 = __nccwpck_require__(2250);
+async function checkInterfaceExists(iface) {
+    const result = await exec.getExecOutput("ip", ["link", "show", iface], { ignoreReturnCode: true, silent: true });
+    return result.exitCode === 0;
+}
+async function addSingleRoute(ip, iface) {
+    const isIpv6 = ip.includes(":");
+    const cidr = isIpv6 ? `${ip}/128` : `${ip}/32`;
+    const ipCommand = isIpv6 ? ["ip", "-6"] : ["ip"];
+    await exec.exec("sudo", [...ipCommand, "route", "add", cidr, "dev", iface]);
+}
+async function resolveDomainIPs(domain) {
+    const ips = [];
+    // Resolve IPv4
+    try {
+        const ipv4Addresses = await dns_1.promises.resolve4(domain);
+        ips.push(...ipv4Addresses);
+    }
+    catch (err) {
+        if (err.code !== 'ENOTFOUND' && err.code !== 'ENODATA') {
+            core.warning(`Failed to resolve IPv4 for ${domain}: ${err.message}`);
+        }
+    }
+    // Resolve IPv6
+    try {
+        const ipv6Addresses = await dns_1.promises.resolve6(domain);
+        ips.push(...ipv6Addresses);
+    }
+    catch (err) {
+        if (err.code !== 'ENOTFOUND' && err.code !== 'ENODATA') {
+            core.warning(`Failed to resolve IPv6 for ${domain}: ${err.message}`);
+        }
+    }
+    return ips;
+}
+async function addRoutesForDomains(domains, iface) {
+    if (!domains.length)
+        return;
+    core.info(`Adding routes for ${domains.length} domain(s)...`);
+    let routeCount = 0;
+    for (const domain of domains) {
+        core.info(`Resolving ${domain}...`);
+        const ips = await resolveDomainIPs(domain);
+        for (const ip of ips) {
+            try {
+                core.info(`Adding route for ${domain} (${ip}) via ${iface}`);
+                await addSingleRoute(ip, iface);
+                routeCount++;
+            }
+            catch (err) {
+                core.warning(`Failed to add route for ${ip}: ${err.message}`);
+            }
+        }
+    }
+    core.info(`Added ${routeCount} route(s) for domains.`);
+}
+async function addRoutesForIPs(ips, iface) {
+    if (!ips.length)
+        return;
+    core.info(`Adding routes for ${ips.length} IP address(es)...`);
+    let routeCount = 0;
+    for (const ip of ips) {
+        try {
+            const cidr = ip.includes(":") ? `${ip}/128` : `${ip}/32`;
+            core.info(`Adding route for ${cidr} via ${iface}`);
+            await addSingleRoute(ip, iface);
+            routeCount++;
+        }
+        catch (err) {
+            core.warning(`Failed to add route for ${ip}: ${err.message}`);
+        }
+    }
+    core.info(`Added ${routeCount} route(s) for IPs.`);
+}
+async function addRoutes(domains, ips, iface) {
+    await addRoutesForDomains(domains, iface);
+    await addRoutesForIPs(ips, iface);
+}
+async function installWireGuard() {
+    core.info("Installing WireGuard...");
+    await exec.exec("sudo", ["apt-get", "install", "-y", "wireguard"]);
+}
+async function setupWireGuardConfig(config, iface) {
+    // Decode config to temp file
+    const tmpDir = await fs_1.promises.mkdtemp(path.join(os.tmpdir(), "wg-"));
+    const tmpConf = path.join(tmpDir, `${iface}.conf`);
+    await fs_1.promises.writeFile(tmpConf, Buffer.from(config, "base64").toString("utf8"), { mode: 0o600 });
+    // Copy to /etc/wireguard with proper permissions
+    const etcDir = "/etc/wireguard";
+    await io.mkdirP(etcDir);
+    const etcConf = path.join(etcDir, `${iface}.conf`);
+    await exec.exec("sudo", ["cp", tmpConf, etcConf]);
+    await exec.exec("sudo", ["chmod", "600", etcConf]);
+}
+async function startWireGuardInterface(iface) {
+    core.info(`Starting WireGuard interface '${iface}'...`);
+    await exec.exec("sudo", ["wg-quick", "up", iface]);
+    core.info(`WireGuard interface '${iface}' is up.`);
+}
+async function setupWireGuard(config, iface) {
+    await installWireGuard();
+    await setupWireGuardConfig(config, iface);
+    await startWireGuardInterface(iface);
+}
+async function handleAddRouteMode(domains, ips, iface) {
+    core.info(`WireGuard interface '${iface}' already exists. Adding routes...`);
+    if (!domains.length && !ips.length) {
+        core.warning("Interface exists but no domains or IPs specified. Nothing to do.");
+        return;
+    }
+    await addRoutes(domains, ips, iface);
+    core.info("Route addition complete.");
+}
+async function handleSetupMode(config, domains, ips, iface) {
+    core.info("Setting up WireGuard interface...");
+    await setupWireGuard(config, iface);
+    await addRoutes(domains, ips, iface);
+    core.info("WireGuard setup complete.");
+}
+function parseInputList(input) {
+    return input.split(",").map(item => item.trim()).filter(item => item);
+}
 async function run() {
     try {
         if (process.platform !== "linux") {
             core.setFailed("This action currently supports only Linux runners.");
             return;
         }
+        // Parse inputs
         const iface = core.getInput("iface") || "wg0";
-        const b64 = core.getInput("config", { required: true });
-        const checkIp = (core.getInput("check_ip") || "true").toLowerCase() === "true";
-        const aptUpdate = (core.getInput("apt_update") || "false").toLowerCase() === "true";
-        // Decode config safely to a temp file first
-        const tmpDir = await fs_1.promises.mkdtemp(path.join(os.tmpdir(), "wg-"));
-        const tmpConf = path.join(tmpDir, `${iface}.conf`);
-        await fs_1.promises.writeFile(tmpConf, Buffer.from(b64, "base64").toString("utf8"), { mode: 0o600 });
-        // Install WireGuard (Ubuntu)
-        if (aptUpdate) {
-            await exec.exec("sudo", ["apt-get", "update"]);
+        const domains = parseInputList(core.getInput("domains") || "");
+        const ips = parseInputList(core.getInput("ips") || "");
+        // Determine mode based on interface existence
+        const interfaceExists = await checkInterfaceExists(iface);
+        if (interfaceExists) {
+            await handleAddRouteMode(domains, ips, iface);
         }
-        await exec.exec("sudo", ["apt-get", "install", "-y", "wireguard"]);
-        // Place config into /etc/wireguard/<iface>.conf with 600 perms
-        const etcDir = "/etc/wireguard";
-        await io.mkdirP(etcDir);
-        const etcConf = path.join(etcDir, `${iface}.conf`);
-        await exec.exec("sudo", ["cp", tmpConf, etcConf]);
-        await exec.exec("sudo", ["chmod", "600", etcConf]);
-        // Bring interface up
-        await exec.exec("sudo", ["wg-quick", "up", iface]);
-        // Save state for post (teardown)
-        core.saveState("iface", iface);
-        // Optional: check external IP (use a simple endpoint)
-        if (checkIp) {
-            const { stdout, stderr } = await exec.getExecOutput("curl", ["-fsSL", "https://ifconfig.me"], { silent: true, ignoreReturnCode: true });
-            const ip = stdout.trim();
-            if (ip) {
-                core.setOutput("public_ip", ip);
-                core.info(`Public IP via WG: ${ip}`);
-            }
-            else {
-                core.error(stderr);
-                core.warning("Could not determine public IP (curl failed or blocked).");
-            }
+        else {
+            const config = core.getInput("config", { required: true });
+            await handleSetupMode(config, domains, ips, iface);
         }
-        core.info(`WireGuard interface '${iface}' is up.`);
     }
     catch (err) {
-        core.setFailed(`WireGuard setup failed: ${err?.message || err}`);
+        core.setFailed(`WireGuard action failed: ${err?.message || err}`);
     }
 }
 run().then();

@@ -25935,6 +25935,34 @@ const exec = __importStar(__nccwpck_require__(2851));
 async function cleanup() {
     try {
         const iface = core.getState("iface") || "wg0";
+        const routesJson = core.getState("routes");
+        // Clean up routes added for split tunneling
+        if (routesJson) {
+            try {
+                const routes = JSON.parse(routesJson);
+                if (routes.length > 0) {
+                    core.info(`Removing ${routes.length} split-tunnel route(s)...`);
+                    for (const route of routes) {
+                        try {
+                            // Determine if it's IPv6 based on the presence of ':'
+                            const isIpv6 = route.includes(":");
+                            if (isIpv6) {
+                                await exec.exec("sudo", ["ip", "-6", "route", "del", route, "dev", iface], { ignoreReturnCode: true });
+                            }
+                            else {
+                                await exec.exec("sudo", ["ip", "route", "del", route, "dev", iface], { ignoreReturnCode: true });
+                            }
+                        }
+                        catch (err) {
+                            core.warning(`Failed to remove route ${route}: ${err?.message || err}`);
+                        }
+                    }
+                }
+            }
+            catch (err) {
+                core.warning(`Failed to clean up routes: ${err?.message || err}`);
+            }
+        }
         // Try to tear down; don't fail the whole job if this errors
         await exec.exec("sudo", ["wg-quick", "down", iface], { ignoreReturnCode: true });
         core.info(`WireGuard interface '${iface}' is down.`);
