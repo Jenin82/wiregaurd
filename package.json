@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "bundle": "pnpm ncc build build/index.js -o dist",
+    "bundle": "pnpm ncc build build/index.js -o dist && pnpm ncc build build/post.js -o dist-post && mv dist-post/index.js dist/post.js",
     "package": "pnpm build && pnpm bundle"
   },
   "author": "",

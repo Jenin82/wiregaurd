@@ -21,6 +21,10 @@ inputs:
     description: "Comma-separated list of IP addresses (IPv4 or IPv6) to route through WireGuard."
     required: false
     default: ""
+  preserve_github_connectivity:
+    description: "Ensure GitHub control-plane endpoints bypass the tunnel by adding host routes via the original gateway (recommended)."
+    required: false
+    default: "true"
 
 outputs:
   public_ip:
@@ -29,3 +33,4 @@ outputs:
 runs:
   using: "node24"
   main: "dist/index.js"
+  post: "dist/post.js"

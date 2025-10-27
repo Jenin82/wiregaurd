@@ -6,6 +6,9 @@ import * as os from "os";
 import * as path from "path";
 import {promises as dns} from "dns";
 
+const STATE_IFACE = "wg_iface";
+const STATE_BYPASS_ROUTES = "bypass_routes"; // JSON string of {ip:string, family:'v4'|'v6'}[]
+
 async function checkInterfaceExists(iface: string): Promise<boolean> {
     const result = await exec.getExecOutput("ip", ["link", "show", iface], {ignoreReturnCode: true, silent: true});
     return result.exitCode === 0;
@@ -97,7 +100,13 @@ async function addRoutes(domains: string[], ips: string[], iface: string): Promi
 
 async function installWireGuard(): Promise<void> {
     core.info("Installing WireGuard...");
-    await exec.exec("sudo", ["apt-get", "install", "-y", "wireguard"]);
+    // Avoid interactive hangs and ensure fresh package lists
+    try {
+        await exec.exec("sudo", ["apt-get", "update"]);
+    } catch (e: any) {
+        core.warning(`apt-get update failed: ${e?.message || e}`);
+    }
+    await exec.exec("sudo", ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "--no-install-recommends", "wireguard"]);
 }
 
 async function setupWireGuardConfig(config: string, iface: string): Promise<void> {
@@ -151,6 +160,73 @@ function parseInputList(input: string): string[] {
     return input.split(",").map(item => item.trim()).filter(item => item);
 }
 
+type DefaultRoute = { family: 'v4'|'v6', dev?: string, via?: string };
+
+async function getDefaultRoutes(): Promise<DefaultRoute[]> {
+    const routes: DefaultRoute[] = [];
+    try {
+        const out4 = await exec.getExecOutput("ip", ["route", "show", "default"], {silent: true});
+        for (const line of out4.stdout.split("\n")) {
+            const m = line.match(/default(?:\s+via\s+(\S+))?(?:\s+dev\s+(\S+))?/);
+            if (m) routes.push({family: 'v4', via: m[1], dev: m[2]});
+        }
+    } catch {}
+    try {
+        const out6 = await exec.getExecOutput("ip", ["-6", "route", "show", "default"], {silent: true});
+        for (const line of out6.stdout.split("\n")) {
+            const m = line.match(/default(?:\s+via\s+(\S+))?(?:\s+dev\s+(\S+))?/);
+            if (m) routes.push({family: 'v6', via: m[1], dev: m[2]});
+        }
+    } catch {}
+    return routes;
+}
+
+const GITHUB_ENDPOINTS = [
+    "github.com",
+    "api.github.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "actions.githubusercontent.com",
+    "pkg-containers.githubusercontent.com",
+    "githubusercontent.com",
+    "github-cloud.s3.amazonaws.com",
+];
+
+async function addBypassRoutesForGithub(defaults: DefaultRoute[]): Promise<{ip:string,family:'v4'|'v6'}[]> {
+    const added: {ip:string,family:'v4'|'v6'}[] = [];
+    core.info("Ensuring GitHub control-plane connectivity (bypass routes)...");
+    for (const host of GITHUB_ENDPOINTS) {
+        let v4: string[] = [];
+        let v6: string[] = [];
+        try { v4 = await dns.resolve4(host); } catch {}
+        try { v6 = await dns.resolve6(host); } catch {}
+
+        for (const ip of v4) {
+            const def = defaults.find(d => d.family === 'v4' && d.via && d.dev);
+            if (!def || !def.via || !def.dev) continue;
+            try {
+                await exec.exec("sudo", ["ip", "route", "add", `${ip}/32`, "via", def.via, "dev", def.dev]);
+                added.push({ip, family:'v4'});
+                core.info(`Bypass route added: ${host} (${ip}) via ${def.via} dev ${def.dev}`);
+            } catch (e:any) {
+                core.debug(`Bypass v4 route for ${ip} may already exist: ${e?.message || e}`);
+            }
+        }
+        for (const ip of v6) {
+            const def = defaults.find(d => d.family === 'v6' && d.via && d.dev);
+            if (!def || !def.via || !def.dev) continue;
+            try {
+                await exec.exec("sudo", ["ip", "-6", "route", "add", `${ip}/128`, "via", def.via, "dev", def.dev]);
+                added.push({ip, family:'v6'});
+                core.info(`Bypass route added: ${host} (${ip}) via ${def.via} dev ${def.dev}`);
+            } catch (e:any) {
+                core.debug(`Bypass v6 route for ${ip} may already exist: ${e?.message || e}`);
+            }
+        }
+    }
+    return added;
+}
+
 async function run() {
     try {
         if (process.platform !== "linux") {
@@ -162,9 +238,26 @@ async function run() {
         const iface = core.getInput("iface") || "wg0";
         const domains = parseInputList(core.getInput("domains") || "");
         const ips = parseInputList(core.getInput("ips") || "");
+        const preserveGithub = (core.getInput("preserve_github_connectivity") || "true").toLowerCase() !== 'false';
+
+        // Save iface for post cleanup
+        core.saveState(STATE_IFACE, iface);
 
         // Determine mode based on interface existence
         const interfaceExists = await checkInterfaceExists(iface);
+
+        // Capture default routes prior to any changes
+        const defaults = await getDefaultRoutes();
+        if (preserveGithub) {
+            try {
+                const added = await addBypassRoutesForGithub(defaults);
+                if (added.length) {
+                    core.saveState(STATE_BYPASS_ROUTES, JSON.stringify(added));
+                }
+            } catch (e:any) {
+                core.warning(`Failed to add GitHub bypass routes: ${e?.message || e}`);
+            }
+        }
 
         if (interfaceExists) {
             await handleAddRouteMode(domains, ips, iface);

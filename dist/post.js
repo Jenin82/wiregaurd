@@ -25699,14 +25699,6 @@ module.exports = require("diagnostics_channel");
 
 /***/ }),
 
-/***/ 2250:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("dns");
-
-/***/ }),
-
 /***/ 4434:
 /***/ ((module) => {
 
@@ -25899,7 +25891,7 @@ module.exports = require("zlib");
 
 /***/ }),
 
-/***/ 5981:
+/***/ 4967:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -25940,257 +25932,53 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(6966));
 const exec = __importStar(__nccwpck_require__(2851));
-const io = __importStar(__nccwpck_require__(378));
-const fs_1 = __nccwpck_require__(9896);
-const os = __importStar(__nccwpck_require__(857));
-const path = __importStar(__nccwpck_require__(6928));
-const dns_1 = __nccwpck_require__(2250);
 const STATE_IFACE = "wg_iface";
 const STATE_BYPASS_ROUTES = "bypass_routes"; // JSON string of {ip:string, family:'v4'|'v6'}[]
 async function checkInterfaceExists(iface) {
     const result = await exec.getExecOutput("ip", ["link", "show", iface], { ignoreReturnCode: true, silent: true });
     return result.exitCode === 0;
 }
-async function addSingleRoute(ip, iface) {
-    const isIpv6 = ip.includes(":");
-    const cidr = isIpv6 ? `${ip}/128` : `${ip}/32`;
-    const ipCommand = isIpv6 ? ["ip", "-6"] : ["ip"];
-    await exec.exec("sudo", [...ipCommand, "route", "add", cidr, "dev", iface]);
-}
-async function resolveDomainIPs(domain) {
-    const ips = [];
-    // Resolve IPv4
-    try {
-        const ipv4Addresses = await dns_1.promises.resolve4(domain);
-        ips.push(...ipv4Addresses);
-    }
-    catch (err) {
-        if (err.code !== 'ENOTFOUND' && err.code !== 'ENODATA') {
-            core.warning(`Failed to resolve IPv4 for ${domain}: ${err.message}`);
-        }
-    }
-    // Resolve IPv6
-    try {
-        const ipv6Addresses = await dns_1.promises.resolve6(domain);
-        ips.push(...ipv6Addresses);
-    }
-    catch (err) {
-        if (err.code !== 'ENOTFOUND' && err.code !== 'ENODATA') {
-            core.warning(`Failed to resolve IPv6 for ${domain}: ${err.message}`);
-        }
-    }
-    return ips;
-}
-async function addRoutesForDomains(domains, iface) {
-    if (!domains.length)
-        return;
-    core.info(`Adding routes for ${domains.length} domain(s)...`);
-    let routeCount = 0;
-    for (const domain of domains) {
-        core.info(`Resolving ${domain}...`);
-        const ips = await resolveDomainIPs(domain);
-        for (const ip of ips) {
-            try {
-                core.info(`Adding route for ${domain} (${ip}) via ${iface}`);
-                await addSingleRoute(ip, iface);
-                routeCount++;
+async function removeBypassRoutes(routes) {
+    for (const r of routes) {
+        try {
+            if (r.family === 'v6') {
+                await exec.exec("sudo", ["ip", "-6", "route", "del", `${r.ip}/128`], { ignoreReturnCode: true });
             }
-            catch (err) {
-                core.warning(`Failed to add route for ${ip}: ${err.message}`);
+            else {
+                await exec.exec("sudo", ["ip", "route", "del", `${r.ip}/32`], { ignoreReturnCode: true });
             }
         }
-    }
-    core.info(`Added ${routeCount} route(s) for domains.`);
-}
-async function addRoutesForIPs(ips, iface) {
-    if (!ips.length)
-        return;
-    core.info(`Adding routes for ${ips.length} IP address(es)...`);
-    let routeCount = 0;
-    for (const ip of ips) {
-        try {
-            const cidr = ip.includes(":") ? `${ip}/128` : `${ip}/32`;
-            core.info(`Adding route for ${cidr} via ${iface}`);
-            await addSingleRoute(ip, iface);
-            routeCount++;
-        }
-        catch (err) {
-            core.warning(`Failed to add route for ${ip}: ${err.message}`);
+        catch (e) {
+            core.debug(`Failed to delete bypass route ${r.ip}: ${e?.message || e}`);
         }
     }
-    core.info(`Added ${routeCount} route(s) for IPs.`);
 }
-async function addRoutes(domains, ips, iface) {
-    await addRoutesForDomains(domains, iface);
-    await addRoutesForIPs(ips, iface);
-}
-async function installWireGuard() {
-    core.info("Installing WireGuard...");
-    // Avoid interactive hangs and ensure fresh package lists
+async function runPost() {
     try {
-        await exec.exec("sudo", ["apt-get", "update"]);
-    }
-    catch (e) {
-        core.warning(`apt-get update failed: ${e?.message || e}`);
-    }
-    await exec.exec("sudo", ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "--no-install-recommends", "wireguard"]);
-}
-async function setupWireGuardConfig(config, iface) {
-    // Decode config to temp file
-    const tmpDir = await fs_1.promises.mkdtemp(path.join(os.tmpdir(), "wg-"));
-    const tmpConf = path.join(tmpDir, `${iface}.conf`);
-    await fs_1.promises.writeFile(tmpConf, Buffer.from(config, "base64").toString("utf8"), { mode: 0o600 });
-    // Copy to /etc/wireguard with proper permissions
-    const etcDir = "/etc/wireguard";
-    await io.mkdirP(etcDir);
-    const etcConf = path.join(etcDir, `${iface}.conf`);
-    await exec.exec("sudo", ["cp", tmpConf, etcConf]);
-    await exec.exec("sudo", ["chmod", "600", etcConf]);
-}
-async function startWireGuardInterface(iface) {
-    core.info(`Starting WireGuard interface '${iface}'...`);
-    await exec.exec("sudo", ["wg-quick", "up", iface]);
-    core.info(`WireGuard interface '${iface}' is up.`);
-}
-async function setupWireGuard(config, iface) {
-    await installWireGuard();
-    await setupWireGuardConfig(config, iface);
-    await startWireGuardInterface(iface);
-}
-async function handleAddRouteMode(domains, ips, iface) {
-    core.info(`WireGuard interface '${iface}' already exists. Adding routes...`);
-    if (!domains.length && !ips.length) {
-        core.warning("Interface exists but no domains or IPs specified. Nothing to do.");
-        return;
-    }
-    await addRoutes(domains, ips, iface);
-    core.info("Route addition complete.");
-}
-async function handleSetupMode(config, domains, ips, iface) {
-    core.info("Setting up WireGuard interface...");
-    await setupWireGuard(config, iface);
-    await addRoutes(domains, ips, iface);
-    core.info("WireGuard setup complete.");
-}
-function parseInputList(input) {
-    return input.split(",").map(item => item.trim()).filter(item => item);
-}
-async function getDefaultRoutes() {
-    const routes = [];
-    try {
-        const out4 = await exec.getExecOutput("ip", ["route", "show", "default"], { silent: true });
-        for (const line of out4.stdout.split("\n")) {
-            const m = line.match(/default(?:\s+via\s+(\S+))?(?:\s+dev\s+(\S+))?/);
-            if (m)
-                routes.push({ family: 'v4', via: m[1], dev: m[2] });
-        }
-    }
-    catch { }
-    try {
-        const out6 = await exec.getExecOutput("ip", ["-6", "route", "show", "default"], { silent: true });
-        for (const line of out6.stdout.split("\n")) {
-            const m = line.match(/default(?:\s+via\s+(\S+))?(?:\s+dev\s+(\S+))?/);
-            if (m)
-                routes.push({ family: 'v6', via: m[1], dev: m[2] });
-        }
-    }
-    catch { }
-    return routes;
-}
-const GITHUB_ENDPOINTS = [
-    "github.com",
-    "api.github.com",
-    "raw.githubusercontent.com",
-    "objects.githubusercontent.com",
-    "actions.githubusercontent.com",
-    "pkg-containers.githubusercontent.com",
-    "githubusercontent.com",
-    "github-cloud.s3.amazonaws.com",
-];
-async function addBypassRoutesForGithub(defaults) {
-    const added = [];
-    core.info("Ensuring GitHub control-plane connectivity (bypass routes)...");
-    for (const host of GITHUB_ENDPOINTS) {
-        let v4 = [];
-        let v6 = [];
-        try {
-            v4 = await dns_1.promises.resolve4(host);
-        }
-        catch { }
-        try {
-            v6 = await dns_1.promises.resolve6(host);
-        }
-        catch { }
-        for (const ip of v4) {
-            const def = defaults.find(d => d.family === 'v4' && d.via && d.dev);
-            if (!def || !def.via || !def.dev)
-                continue;
+        const iface = core.getState(STATE_IFACE);
+        const routesJson = core.getState(STATE_BYPASS_ROUTES);
+        if (routesJson) {
             try {
-                await exec.exec("sudo", ["ip", "route", "add", `${ip}/32`, "via", def.via, "dev", def.dev]);
-                added.push({ ip, family: 'v4' });
-                core.info(`Bypass route added: ${host} (${ip}) via ${def.via} dev ${def.dev}`);
+                const routes = JSON.parse(routesJson);
+                await removeBypassRoutes(routes);
             }
             catch (e) {
-                core.debug(`Bypass v4 route for ${ip} may already exist: ${e?.message || e}`);
+                core.debug(`Failed to parse/remove bypass routes: ${e?.message || e}`);
             }
         }
-        for (const ip of v6) {
-            const def = defaults.find(d => d.family === 'v6' && d.via && d.dev);
-            if (!def || !def.via || !def.dev)
-                continue;
-            try {
-                await exec.exec("sudo", ["ip", "-6", "route", "add", `${ip}/128`, "via", def.via, "dev", def.dev]);
-                added.push({ ip, family: 'v6' });
-                core.info(`Bypass route added: ${host} (${ip}) via ${def.via} dev ${def.dev}`);
+        if (iface) {
+            const exists = await checkInterfaceExists(iface);
+            if (exists) {
+                core.info(`Tearing down WireGuard interface '${iface}'...`);
+                await exec.exec("sudo", ["wg-quick", "down", iface], { ignoreReturnCode: true });
             }
-            catch (e) {
-                core.debug(`Bypass v6 route for ${ip} may already exist: ${e?.message || e}`);
-            }
-        }
-    }
-    return added;
-}
-async function run() {
-    try {
-        if (process.platform !== "linux") {
-            core.setFailed("This action currently supports only Linux runners.");
-            return;
-        }
-        // Parse inputs
-        const iface = core.getInput("iface") || "wg0";
-        const domains = parseInputList(core.getInput("domains") || "");
-        const ips = parseInputList(core.getInput("ips") || "");
-        const preserveGithub = (core.getInput("preserve_github_connectivity") || "true").toLowerCase() !== 'false';
-        // Save iface for post cleanup
-        core.saveState(STATE_IFACE, iface);
-        // Determine mode based on interface existence
-        const interfaceExists = await checkInterfaceExists(iface);
-        // Capture default routes prior to any changes
-        const defaults = await getDefaultRoutes();
-        if (preserveGithub) {
-            try {
-                const added = await addBypassRoutesForGithub(defaults);
-                if (added.length) {
-                    core.saveState(STATE_BYPASS_ROUTES, JSON.stringify(added));
-                }
-            }
-            catch (e) {
-                core.warning(`Failed to add GitHub bypass routes: ${e?.message || e}`);
-            }
-        }
-        if (interfaceExists) {
-            await handleAddRouteMode(domains, ips, iface);
-        }
-        else {
-            const config = core.getInput("config", { required: true });
-            await handleSetupMode(config, domains, ips, iface);
         }
     }
     catch (err) {
-        core.setFailed(`WireGuard action failed: ${err?.message || err}`);
+        core.warning(`Post cleanup failed: ${err?.message || err}`);
     }
 }
-run().then();
+runPost().then();
 
 
 /***/ }),
@@ -27862,7 +27650,7 @@ module.exports = parseParams
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(5981);
+/******/ 	var __webpack_exports__ = __nccwpck_require__(4967);
 /******/ 	module.exports = __webpack_exports__;
 /******/ 	
 /******/ })()
