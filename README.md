@@ -219,11 +219,59 @@ This action doesn't include cleanup functionality because:
 
 ## Troubleshooting
 
+### Action appears to hang or has delayed logs
+
+**Version 2.0+** includes fixes for these issues:
+
+- **Real-time logging**: All command output now streams immediately instead of buffering
+- **Timeout protection**: Operations have configurable timeouts to prevent indefinite hangs
+- **Progress indicators**: Visual feedback shows the action is working during long operations
+- **DNS retry logic**: Failed DNS lookups are retried with exponential backoff
+
+**If you're still experiencing issues:**
+
+1. **Check the logs carefully** - Look for timeout messages or DNS resolution warnings
+2. **Verify DNS is working** - Test domain resolution manually: `nslookup your-domain.com`
+3. **Check WireGuard config** - Ensure your config doesn't have PostUp/PreDown scripts that hang
+4. **Monitor execution time** - The action logs total execution time at completion
+
+**Timeout Configuration:**
+
+The action has built-in timeouts:
+- DNS resolution: 10 seconds per lookup (3 retry attempts)
+- WireGuard interface startup: 60 seconds
+- Route addition: 10 seconds per route
+
+### Action hangs during `wg-quick up`
+
+**Common causes:**
+
+1. **DNS resolution in config** - If your WireGuard config's `Endpoint` uses a domain name that can't be resolved
+2. **PostUp/PreDown scripts** - Scripts in your config that hang or wait for input
+3. **Network connectivity** - Unable to reach the WireGuard endpoint
+
+**Solutions:**
+
+```ini
+# Use IP address instead of domain for Endpoint
+[Peer]
+Endpoint = 203.0.113.1:51820  # ✅ IP address
+# Instead of:
+# Endpoint = vpn.example.com:51820  # ❌ May cause DNS lookup delays
+```
+
+**Diagnostic steps:**
+
+1. Test your config locally first: `sudo wg-quick up wg0`
+2. Check systemd logs if startup fails: `sudo journalctl -u wg-quick@wg0`
+3. Verify endpoint is reachable: `ping -c 3 <endpoint-ip>`
+
 ### Routes not working?
 
 - Verify your WireGuard config doesn't use `AllowedIPs = 0.0.0.0/0`
 - Check that domains resolve correctly (DNS issues)
 - Ensure the WireGuard peer accepts traffic for the routed IPs
+- Verify routes were added: `ip route show dev wg0`
 
 ### "Interface exists but no domains or IPs specified"
 
@@ -231,7 +279,40 @@ This warning appears when you call the action a second time without providing `d
 
 ### DNS resolution failures
 
-Some domains may not have IPv4 or IPv6 records. The action logs warnings but continues. Check the logs for details.
+**Symptoms:**
+- Warning: `Failed to resolve <domain> after 3 attempts`
+- Routes not added for specific domains
+
+**Causes:**
+- Domain doesn't exist or has no DNS records
+- DNS server timeout or unreachable
+- Network connectivity issues
+
+**The action automatically:**
+- Retries DNS lookups 3 times with 2-second delays
+- Times out after 10 seconds per lookup
+- Continues with other domains if one fails
+
+**Manual verification:**
+```bash
+# Test DNS resolution
+dig +short your-domain.com
+nslookup your-domain.com
+```
+
+### Long-running workflows
+
+For workflows that run for extended periods:
+
+1. **Initial setup is fast** - WireGuard setup typically completes in 10-30 seconds
+2. **Route additions are incremental** - Each domain/IP adds ~1-2 seconds
+3. **Progress is logged** - Watch for `[X/Y]` progress indicators in logs
+4. **Timeouts prevent hangs** - Operations fail fast rather than hanging indefinitely
+
+**Performance tips:**
+- Minimize the number of domains (resolve to IPs beforehand if possible)
+- Use IP addresses directly when known
+- Batch route additions in a single action call rather than multiple calls
 
 ## Contributing
 
