@@ -15,7 +15,6 @@ A GitHub Action that brings up WireGuard tunnels on Ubuntu runners with dynamic 
 | `config`  | ✅ Yes    | -       | Base64-encoded `wg-quick` configuration file                                   |
 | `domains` | No       | `""`    | Comma-separated list of domains to route through WireGuard                     |
 | `ips`     | No       | `""`    | Comma-separated list of IP addresses (IPv4 or IPv6) to route through WireGuard |
-| `preserve_github_connectivity` | No | `"true"` | Add host routes that bypass the VPN for GitHub control-plane endpoints to keep logs and status updates working |
 
 ## Usage Examples
 
@@ -29,10 +28,6 @@ jobs:
       - uses: rohittp0/wiregaurd@v2
         with:
           config: ${{ secrets.WG_CLIENT_CONF_BASE64 }}
-
-      # Optional: explicitly preserve GitHub connectivity (defaults to true)
-      # with:
-      #   preserve_github_connectivity: 'true'
 ```
 
 ### 2. Split Tunneling (Specific Domains)
@@ -82,21 +77,6 @@ jobs:
 **How it works:**
 - First call: Sets up WireGuard interface (detected automatically)
 - Second call: Detects interface exists, only adds routes for new domain
-
-### 3b. Full-Tunnel Configs (Caution)
-
-If your `wg0.conf` uses full-tunnel `AllowedIPs = 0.0.0.0/0, ::/0`, keep `preserve_github_connectivity: true` (default) so the action adds bypass routes for key GitHub domains. This prevents job logs and status updates from hanging.
-
-```yaml
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: rohittp0/wiregaurd@v2
-        with:
-          config: ${{ secrets.WG_CLIENT_CONF_BASE64 }}
-          preserve_github_connectivity: 'true' # recommended for full-tunnel configs
-```
 
 ### 4. Direct IP Routing
 
@@ -197,23 +177,6 @@ AllowedIPs = 10.0.0.1/32  # ✅ Only the peer's IP, routes controlled by action
 
 With the minimal `AllowedIPs` configuration, the action takes full control of routing, allowing you to specify exactly which domains/IPs should go through the tunnel.
 
-### Connectivity Preservation for GitHub (Recommended)
-
-To keep GitHub Actions job logs and status updates working when a VPN is active, this action can add host routes that bypass the tunnel for core GitHub endpoints (both IPv4 and IPv6). This is controlled by `preserve_github_connectivity` (defaults to `true`).
-
-Endpoints include (non-exhaustive):
-
-- github.com
-- api.github.com
-- raw.githubusercontent.com
-- objects.githubusercontent.com
-- actions.githubusercontent.com
-- pkg-containers.githubusercontent.com
-- githubusercontent.com
-- github-cloud.s3.amazonaws.com
-
-If you set `preserve_github_connectivity: 'false'`, all traffic matching your WireGuard config will go through the tunnel and you may see hangs in logs or status updates with full-tunnel `AllowedIPs`.
-
 ## How It Works
 
 ### Automatic Mode Detection
@@ -245,13 +208,14 @@ Routes are added with `/32` (IPv4) or `/128` (IPv6) prefix lengths, ensuring onl
 
 ## Design Decisions
 
-### Cleanup
+### Why No Cleanup?
 
-This action now includes a post-job cleanup step that:
-- Tears down the WireGuard interface (`wg-quick down <iface>`) if it is up
-- Removes any GitHub bypass routes that were added
+This action doesn't include cleanup functionality because:
+- GitHub-hosted runners are ephemeral and destroyed after each job
+- The entire VM/container is wiped, including all network configurations
+- Cleanup would add complexity without benefit for the primary use case
 
-This improves reliability for both GitHub-hosted and self-hosted runners. On self-hosted runners, it helps prevent persistent route state between jobs.
+**Note for self-hosted runners:** If you're using self-hosted runners, be aware that routes will persist between jobs. You may want to manually clean up or restart the runner between jobs.
 
 ## Troubleshooting
 
@@ -260,7 +224,6 @@ This improves reliability for both GitHub-hosted and self-hosted runners. On sel
 - Verify your WireGuard config doesn't use `AllowedIPs = 0.0.0.0/0`
 - Check that domains resolve correctly (DNS issues)
 - Ensure the WireGuard peer accepts traffic for the routed IPs
-- If using full-tunnel configs, leave `preserve_github_connectivity` set to `true`
 
 ### "Interface exists but no domains or IPs specified"
 
